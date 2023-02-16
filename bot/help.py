@@ -1,7 +1,10 @@
 import logging
-import csv
 import io
 import discord
+import openpyxl
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from bot.config.const import (
     HELP_MESSAGE_NON_AUTHORIZED_USER,
@@ -58,8 +61,117 @@ async def help(ctx):
         )
 
 
-@client.command(name=EXPORT_COMMAND_NAME)
-async def export(ctx):
+def export_docx(accepted_proposals):
+    # Create a new Excel workbook and worksheet
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Proposal History"
+
+    # Define column names and widths
+    columns = [
+        {"header": "Discord link", "width": 20},
+        {"header": "When completed (UTC time)", "width": 25},
+        {"header": "Author", "width": 20},
+        {"header": "Has grant", "width": 10},
+        {"header": "Given to", "width": 25},
+        {"header": "Amount", "width": 15},
+        {"header": "Description", "width": 40},
+    ]
+
+    # Write the column names to the worksheet and set column widths
+    for col_num, column in enumerate(columns, 1):
+        column_letter = get_column_letter(col_num)
+        column_header = column["header"]
+        column_width = column["width"]
+        worksheet.column_dimensions[column_letter].width = column_width
+        worksheet.cell(row=1, column=col_num, value=column_header).font = Font(bold=True)
+
+    # Loop over each accepted proposal and add a row to the worksheet
+    for row_num, proposal in enumerate(accepted_proposals, 2):
+        # Add a hyperlink to the Discord link column
+        discord_link = proposal.discord_link
+        worksheet.cell(row=row_num, column=1).value = discord_link
+        worksheet.cell(row=row_num, column=1).hyperlink = discord_link
+
+        # Add data to the remaining columns
+        worksheet.cell(
+            row=row_num, column=2, value=proposal.closed_at.strftime("%Y-%m-%d %H:%M:%S")
+        )
+        worksheet.cell(row=row_num, column=3, value=str(proposal.author))
+        worksheet.cell(row=row_num, column=4, value=str(not proposal.is_grantless))
+        worksheet.cell(
+            row=row_num,
+            column=5,
+            value=str(proposal.mention) if proposal.mention is not None else EMPTY_ANALYTICS_VALUE,
+        )
+        worksheet.cell(
+            row=row_num,
+            column=6,
+            value=str(get_amount_to_print(proposal.amount))
+            if proposal.amount is not None
+            else EMPTY_ANALYTICS_VALUE,
+        )
+        worksheet.cell(row=row_num, column=7, value=str(proposal.description))
+
+    # Create a table for the worksheet
+    table_range = f"A1:{get_column_letter(len(columns))}{len(accepted_proposals)+1}"
+    table = Table(displayName="ProposalHistory", ref=table_range)
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium9",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    worksheet.add_table(table)
+
+    # Save the Excel workbook to a temporary file
+    temp_file = io.BytesIO()
+    workbook.save(temp_file)
+    temp_file.seek(0)
+
+    return temp_file, "proposal_history.xlsx"
+
+
+def export_csv(accepted_proposals):
+    file = io.StringIO()
+    writer = csv.DictWriter(
+        file,
+        fieldnames=[
+            "When completed (UTC time)",
+            "Author",
+            "Has grant",
+            "Given to",
+            "Amount",
+            "Description",
+            "Voting URL",
+        ],
+    )
+    writer.writeheader()
+
+    for proposal in accepted_proposals:
+        logger.debug("Exporting %s", proposal)
+        writer.writerow(
+            {
+                "When completed (UTC time)": proposal.closed_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "Author": proposal.author,
+                "Has grant": not proposal.is_grantless,
+                "Given to": proposal.mention
+                if proposal.mention is not None
+                else EMPTY_ANALYTICS_VALUE,
+                "Amount": get_amount_to_print(proposal.amount)
+                if proposal.amount is not None
+                else EMPTY_ANALYTICS_VALUE,
+                "Description": proposal.description,
+                "Voting URL": proposal.voting_message_url,
+            }
+        )
+    file.seek(0)
+
+    return file, "proposal_history.csv"
+
+
+async def export(ctx, is_csv):
     try:
         # Reply to a non-authorized user
         if not await validate_roles(ctx.message.author):
@@ -82,42 +194,12 @@ async def export(ctx):
             await ctx.author.send("No proposals were accepted yet.")
             return
 
-        file = io.StringIO()
-        writer = csv.DictWriter(
-            file,
-            fieldnames=[
-                "When completed (UTC time)",
-                "Author",
-                "Has grant",
-                "Given to",
-                "Amount",
-                "Description",
-                "Voting URL",
-            ],
-        )
-        writer.writeheader()
+        if is_csv:
+            document, filename = export_csv(accepted_proposals)
+        else:
+            document, filename = export_docx(accepted_proposals)
 
-        for proposal in accepted_proposals:
-            logger.debug("Exporting %s", proposal)
-            writer.writerow(
-                {
-                    "When completed (UTC time)": proposal.closed_at.strftime("%Y-%m-%d %H:%M:%S"),
-                    "Author": proposal.author,
-                    "Has grant": not proposal.is_grantless,
-                    "Given to": proposal.mention
-                    if proposal.mention is not None
-                    else EMPTY_ANALYTICS_VALUE,
-                    "Amount": get_amount_to_print(proposal.amount)
-                    if proposal.amount is not None
-                    else EMPTY_ANALYTICS_VALUE,
-                    "Description": proposal.description,
-                    "Voting URL": f'=HYPERLINK("{proposal.voting_message_url}", "url")',
-                }
-            )
-
-        file.seek(0)
-
-        await ctx.author.send(file=discord.File(file, filename="proposal_history.csv"))
+        await ctx.author.send(file=discord.File(document, filename=filename))
 
     except Exception as e:
         try:
@@ -136,3 +218,13 @@ async def export(ctx):
             ctx.message.author.mention,
             exc_info=True,
         )
+
+
+@client.command(name=EXPORT_COMMAND_NAME)
+async def export_command(ctx):
+    export(ctx, False)
+
+
+@client.command(name=EXPORT_CSV_COMMAND_NAME)
+async def export_command(ctx):
+    export(ctx, True)

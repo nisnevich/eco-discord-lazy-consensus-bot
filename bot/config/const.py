@@ -45,6 +45,7 @@ PROPOSAL_COMMAND_ALIASES = ['lazy', 'suggest', 'prop', 'consensus']
 GRANT_APPLY_COMMAND_NAME = 'grant'
 HELP_COMMAND_NAME = 'help-lazy'
 EXPORT_COMMAND_NAME = 'export'
+EXPORT_CSV_COMMAND_NAME = 'export-csv'
 VOTERS_LIST_SEPARATOR = ", "
 RESPONSIBLE_MENTION = "<@703574259401883728>"  # Nickname of a person who's responsible for maintaining the bot (used in some error messages to ping).
 MAX_DESCRIPTION_LENGTH = 1600  # 1600 is determined experimentally; Discord API has some limitations, and this way we can make sure the app will not crash with discord.errors.HTTPException
